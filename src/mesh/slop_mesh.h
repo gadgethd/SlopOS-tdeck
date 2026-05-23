@@ -188,7 +188,6 @@ protected:
             }
         }
         const char* channel = chname ? chname : "[group]";
-
         // Parse "<sender_name>: <message>" — this is the format used by
         // MeshCore's BaseChatMesh (and now by SlopOS sendGroupText).
         // Falls back to raw_text as sender if no colon separator found.
