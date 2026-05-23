@@ -91,6 +91,7 @@ static lv_obj_t* make_screen_full(const char* title)
     // Time (24h snapshot)
     {
         uint32_t epoch = slopos::mesh::getCurrentTime();
+        Serial.printf("[debug] top-bar time epoch=%u\n", epoch);  // debug aid for time issues
         char t[8];
         if (epoch == 0) {
             snprintf(t, sizeof(t), "--:--");
