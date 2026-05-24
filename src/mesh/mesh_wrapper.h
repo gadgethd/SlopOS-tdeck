@@ -76,6 +76,7 @@ uint32_t makeEpoch(int year, int month, int day, int hour, int minute);
 // Packet log
 int  getPacketLogCount();
 bool getPacketLogEntry(int index, PacketLogEntry* out);
+void pushPacketLog(const char* source, int rssi, float snr, const char* type);
 
 // Trace route
 bool sendTrace(int contact_idx, uint32_t* out_tag);

@@ -14,6 +14,9 @@
 namespace slopos {
 namespace mesh {
 
+// Forward declaration for packet logging (defined in mesh_wrapper.cpp)
+void pushPacketLog(const char* source, int rssi, float snr, const char* type);
+
 static constexpr int SLOP_MAX_CONTACTS  = 64;
 static constexpr int SLOP_MAX_CHANNELS  = 8;
 #define OUT_PATH_UNKNOWN  0xFF
@@ -47,7 +50,6 @@ class SlopMesh : public ::mesh::Mesh {
 
     slopos::NodePrefs _prefs;
     void (*_onMessage)(const char* sender, const char* channel, const char* text);
-    void (*_onPacket)(const char* source, int rssi, float snr, const char* type);
 
     char _own_name[32];
 
@@ -75,13 +77,13 @@ protected:
     }
 
     // ── Incoming peer data (DM / REQ / RESPONSE) ────
-    void onPeerDataRecv(::mesh::Packet* pkt, uint8_t type, int sender_idx,
+    void onPeerDataRecv(::mesh::Packet*, uint8_t type, int sender_idx,
                         const uint8_t* secret, uint8_t* data, size_t len) override
     {
         // Accept TXT_MSG, REQ, and RESPONSE payloads as incoming messages
         if (type != PAYLOAD_TYPE_TXT_MSG && type != PAYLOAD_TYPE_REQ &&
             type != PAYLOAD_TYPE_RESPONSE) return;
-        if (_nMatches == 0 || (!_onMessage && !_onPacket)) return;
+        if (_nMatches == 0 || !_onMessage) return;
         // TXT_MSG layout: [4-byte LE timestamp][1-byte text flags][null-terminated text]
         // REQ/RESPONSE: raw text (no timestamp/flags header).
         const char* text;
@@ -97,13 +99,7 @@ protected:
         int idx = _matchIdxs[sender_idx];
         const char* sender = _contacts[idx].name;
         if (sender[0]) {
-            _contacts[idx].last_rssi = (int)_radio->getLastRSSI();
-            if (_onMessage) _onMessage(sender, "", text);
-            if (_onPacket) {
-                const char* pkt_type = (type == PAYLOAD_TYPE_TXT_MSG) ? "DM" :
-                                       (type == PAYLOAD_TYPE_REQ) ? "REQ" : "RESP";
-                _onPacket(sender, _contacts[idx].last_rssi, pkt->getSNR(), pkt_type);
-            }
+            _onMessage(sender, "", text);
         }
     }
 
@@ -111,6 +107,7 @@ protected:
     void onAdvertRecv(::mesh::Packet* pkt, const ::mesh::Identity& id, uint32_t timestamp,
                       const uint8_t* app_data, size_t app_data_len) override
     {
+        pushPacketLog("ADVERT_CB", (int)_radio->getLastRSSI(), pkt->getSNR(), "RAWTEST");
         // Parse advert using MeshCore's standard parser
         AdvertDataParser parser(app_data, (uint8_t)app_data_len);
         if (!parser.isValid()) return;
@@ -128,10 +125,9 @@ protected:
             if (_contacts[i].id.matches(id)) {
                 _contacts[i].last_seen = timestamp;
                 _contacts[i].last_rssi = (int)_radio->getLastRSSI();
-                // Update name if changed (e.g. user renamed device)
                 strncpy(_contacts[i].name, name, sizeof(_contacts[i].name) - 1);
                 _contacts[i].name[sizeof(_contacts[i].name) - 1] = '\0';
-                if (_onPacket) _onPacket(name, _contacts[i].last_rssi, pkt->getSNR(), "ADVERT");
+                pushPacketLog(name, _contacts[i].last_rssi, pkt->getSNR(), "ADVERT");
                 return;
             }
 
@@ -145,8 +141,7 @@ protected:
 
         strncpy(c.name, name, sizeof(c.name) - 1);
         c.name[sizeof(c.name) - 1] = '\0';
-
-        if (_onPacket) _onPacket(name, c.last_rssi, pkt->getSNR(), "ADVERT");
+        pushPacketLog(name, c.last_rssi, pkt->getSNR(), "ADVERT");
     }
 
     // ── Group text ────────────────────────────────────
@@ -178,11 +173,11 @@ protected:
         }
     }
 
-    void onGroupDataRecv(::mesh::Packet* pkt, uint8_t type, const ::mesh::GroupChannel& ch,
+    void onGroupDataRecv(::mesh::Packet*, uint8_t type, const ::mesh::GroupChannel& ch,
                           uint8_t* data, size_t len) override
     {
         if (type != PAYLOAD_TYPE_GRP_TXT && type != PAYLOAD_TYPE_GRP_DATA) return;
-        if ((!_onMessage && !_onPacket) || len <= 5) return;
+        if (!_onMessage || len <= 5) return;
 
         // data[0..3] = LE timestamp
         // data[4]    = text_type (0 = plain text)
@@ -207,16 +202,15 @@ protected:
         const char* message;
         parse_group_sender(raw_text, sender_buf, sizeof(sender_buf), &message);
 
-        if (_onMessage) _onMessage(sender_buf, channel, message);
-        if (_onPacket) _onPacket(sender_buf, (int)_radio->getLastRSSI(), pkt->getSNR(), "CHANNEL");
+        _onMessage(sender_buf, channel, message);
     }
 
     // ── Anonymous data ────────────────────────────────
-    void onAnonDataRecv(::mesh::Packet* pkt, const uint8_t* secret,
+    void onAnonDataRecv(::mesh::Packet*, const uint8_t* secret,
                         const ::mesh::Identity& sender,
                         uint8_t* data, size_t len) override
     {
-        if ((!_onMessage && !_onPacket) || len <= 4) return;
+        if (!_onMessage || len <= 4) return;
         // Data layout: [4-byte LE timestamp][null-terminated text]
         if (len > 4) data[len - 1] = '\0';
         const char* text = (const char*)(data + 4);
@@ -224,8 +218,7 @@ protected:
         // Generate a fallback name from the sender's public key
         char fallback[16];
         snprintf(fallback, sizeof(fallback), "anon_%02x", sender.pub_key[0]);
-        if (_onMessage) _onMessage(fallback, "", text);
-        if (_onPacket) _onPacket(fallback, (int)_radio->getLastRSSI(), pkt->getSNR(), "ANON");
+        _onMessage(fallback, "", text);
     }
 
     // ── Path learning (from peer-path callbacks) ──────
@@ -304,12 +297,38 @@ public:
         // Future: handle application-specific raw data
     }
 
+    // ── Packet-level RX logging ───────────────────────
+    // Called by Dispatcher::checkRecv() for every successfully parsed packet,
+    // BEFORE onRecvPacket()'s gates run. Seeing "ADVERT_RX" here but not
+    // "ADVERT_CB" in onAdvertRecv() means a gate is blocking: incomplete
+    // payload length, self-identity match, hasSeen duplicate, or bad signature.
+    void logRx(::mesh::Packet* pkt, int, float) override {
+        const char* tname;
+        switch (pkt->getPayloadType()) {
+            case PAYLOAD_TYPE_ADVERT:   tname = "ADVERT_RX"; break;
+            case PAYLOAD_TYPE_ACK:      tname = "ACK";        break;
+            case PAYLOAD_TYPE_TXT_MSG:  tname = "DM_RX";      break;
+            case PAYLOAD_TYPE_GRP_TXT:
+            case PAYLOAD_TYPE_GRP_DATA: tname = "GRP_RX";     break;
+            case PAYLOAD_TYPE_ANON_REQ: tname = "ANON_RX";    break;
+            case PAYLOAD_TYPE_TRACE:    tname = "TRACE";      break;
+            default:                    tname = "PKT_RX";     break;
+        }
+        pushPacketLog("RADIO", (int)_radio->getLastRSSI(), pkt->getSNR(), tname);
+    }
+
+#if defined(SLOPOS_DEBUG) && SLOPOS_DEBUG
+    // Called even for raw signals that fail to parse — confirms the radio is
+    // receiving anything at all. Gated to debug builds because it's very noisy.
+    void logRxRaw(float snr, float rssi, const uint8_t*, int) override {
+        pushPacketLog("RADIO", (int)rssi, snr, "RAW_RX");
+    }
+#endif
 
     SlopMesh(::mesh::Radio& r, ::mesh::MillisecondClock& ms, ::mesh::RNG& rng,
              ::mesh::RTCClock& rtc, ::mesh::PacketManager& mgr, ::mesh::MeshTables& tbl)
         : ::mesh::Mesh(r, ms, rng, rtc, mgr, tbl),
-          _onMessage(nullptr),
-          _onPacket(nullptr)
+          _onMessage(nullptr)
     {
         _own_name[0] = '\0';
         _prefs.set_defaults();
@@ -328,7 +347,6 @@ public:
     void clearTraceResult() { _has_trace_result = false; }
 
     void setMessageCallback(void (*cb)(const char* sender, const char* channel, const char* text)) { _onMessage = cb; }
-    void setPacketCallback(void (*cb)(const char* source, int rssi, float snr, const char* type)) { _onPacket = cb; }
     void setOwnName(const char* name) {
         if (!name) return;
         strncpy(_own_name, name, sizeof(_own_name) - 1);

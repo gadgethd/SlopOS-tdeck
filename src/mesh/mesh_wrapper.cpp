@@ -70,6 +70,13 @@ static void queue_push(const char* sender, const char* channel, const char* text
     m.is_self = false;
     msg_head = (msg_head + 1) % MAX_QUEUED;
     msg_count++;
+    // Log as packet entry (accessible via Packets screen)
+    if (sender && sender[0]) {
+        int rssi = (int)radio_driver.getLastRSSI();
+        float snr = radio_driver.getLastSNR();
+        const char* ptype = (channel && channel[0]) ? "CHANNEL" : "DM";
+        slopos::mesh::pushPacketLog(sender, rssi, snr, ptype);
+    }
 }
 
 static bool queue_pop(MeshMessage* out) {
@@ -136,7 +143,8 @@ static PacketLogEntry pkt_log[MAX_PACKET_LOG];
 static int pkt_log_head = 0;
 static int pkt_log_count = 0;
 
-static void logPacket(const char* source, int rssi, float snr, const char* type) {
+void pushPacketLog(const char* source, int rssi, float snr, const char* type) {
+    if (!source || !type) return;
     PacketLogEntry& e = pkt_log[pkt_log_head];
     e.timestamp = getCurrentTime();
     strncpy(e.source, source, sizeof(e.source) - 1);
@@ -193,14 +201,10 @@ bool init(bool spiffs_ok)
         return false;
     }
 
-    int16_t cr_enum = (cr == 5) ? RADIOLIB_SX126X_LORA_CR_4_5 :
-                      (cr == 6) ? RADIOLIB_SX126X_LORA_CR_4_6 :
-                      (cr == 7) ? RADIOLIB_SX126X_LORA_CR_4_7 :
-                                  RADIOLIB_SX126X_LORA_CR_4_8;
     radio_module.setFrequency(freq);
     radio_module.setBandwidth(bw);
     radio_module.setSpreadingFactor(sf);
-    radio_module.setCodingRate(cr_enum);
+    radio_module.setCodingRate(cr);   // denominator (5–8); RadioLib rejects the SX126X enum constants
     radio_module.setOutputPower(tx_power);
 #if defined(SLOPOS_DEBUG) && SLOPOS_DEBUG
     Serial.printf("[mesh] Radio: %.3f MHz / %.1f kHz / SF%d / CR4/%d / %d dBm\n",
@@ -215,7 +219,6 @@ bool init(bool spiffs_ok)
         return false;
     }
     g_mesh->setMessageCallback(onMeshMessage);
-    g_mesh->setPacketCallback(logPacket);
     g_mesh->setOwnName(own_name);
 
     // Generate or load identity
@@ -244,6 +247,8 @@ bool init(bool spiffs_ok)
 #if defined(SLOPOS_DEBUG) && SLOPOS_DEBUG
     Serial.println("[mesh] SlopMesh initialized");
 #endif
+    // Test entry to verify packet log works
+    pushPacketLog("SYSTEM", 0, 0.0f, "BOOT");
     return true;
 }
 
@@ -257,16 +262,19 @@ void loop()
 // ── Send ────────────────────────────────────────
 
 bool sendMessage(const char* dest, const char* text) {
-    return g_mesh ? g_mesh->sendTextTo(dest, text) : false;
+    bool ok = g_mesh ? g_mesh->sendTextTo(dest, text) : false;
+    if (ok) pushPacketLog(own_name, 0, 0.0f, "TX_DM");
+    return ok;
 }
 
 bool sendChannelMessage(const char* channel_name, const char* text) {
     if (!g_mesh) return false;
-    // Find channel by name
     for (int i = 0; i < g_mesh->getChannelCount(); i++) {
         auto* ch = g_mesh->getChannel(i);
         if (ch && strcmp(ch->name, channel_name) == 0) {
-            return g_mesh->sendGroupText(i, text);
+            bool ok = g_mesh->sendGroupText(i, text);
+            if (ok) pushPacketLog(own_name, 0, 0.0f, "TX_CHAN");
+            return ok;
         }
     }
     return false;
@@ -375,6 +383,7 @@ bool sendAdvert() {
     }
 
     last_advert_success = true;
+    pushPacketLog(own_name, 0, 0.0f, "TX_ADV");
     return true;
 }
 
