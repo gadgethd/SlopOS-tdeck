@@ -107,7 +107,6 @@ protected:
     void onAdvertRecv(::mesh::Packet* pkt, const ::mesh::Identity& id, uint32_t timestamp,
                       const uint8_t* app_data, size_t app_data_len) override
     {
-        pushPacketLog("ADVERT_CB", (int)_radio->getLastRSSI(), pkt->getSNR(), "RAWTEST");
         // Parse advert using MeshCore's standard parser
         AdvertDataParser parser(app_data, (uint8_t)app_data_len);
         if (!parser.isValid()) return;
@@ -298,10 +297,6 @@ public:
     }
 
     // ── Packet-level RX logging ───────────────────────
-    // Called by Dispatcher::checkRecv() for every successfully parsed packet,
-    // BEFORE onRecvPacket()'s gates run. Seeing "ADVERT_RX" here but not
-    // "ADVERT_CB" in onAdvertRecv() means a gate is blocking: incomplete
-    // payload length, self-identity match, hasSeen duplicate, or bad signature.
     void logRx(::mesh::Packet* pkt, int, float) override {
         const char* tname;
         switch (pkt->getPayloadType()) {
@@ -316,14 +311,6 @@ public:
         }
         pushPacketLog("RADIO", (int)_radio->getLastRSSI(), pkt->getSNR(), tname);
     }
-
-#if defined(SLOPOS_DEBUG) && SLOPOS_DEBUG
-    // Called even for raw signals that fail to parse — confirms the radio is
-    // receiving anything at all. Gated to debug builds because it's very noisy.
-    void logRxRaw(float snr, float rssi, const uint8_t*, int) override {
-        pushPacketLog("RADIO", (int)rssi, snr, "RAW_RX");
-    }
-#endif
 
     SlopMesh(::mesh::Radio& r, ::mesh::MillisecondClock& ms, ::mesh::RNG& rng,
              ::mesh::RTCClock& rtc, ::mesh::PacketManager& mgr, ::mesh::MeshTables& tbl)
