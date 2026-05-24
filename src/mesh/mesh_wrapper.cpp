@@ -130,6 +130,25 @@ static void saveIdentity(::mesh::LocalIdentity& id) {
 namespace slopos {
 namespace mesh {
 
+// ── Packet log ────────────────────────────────────
+static constexpr int MAX_PACKET_LOG = 50;
+static PacketLogEntry pkt_log[MAX_PACKET_LOG];
+static int pkt_log_head = 0;
+static int pkt_log_count = 0;
+
+static void logPacket(const char* source, int rssi, float snr, const char* type) {
+    PacketLogEntry& e = pkt_log[pkt_log_head];
+    e.timestamp = getCurrentTime();
+    strncpy(e.source, source, sizeof(e.source) - 1);
+    e.source[sizeof(e.source) - 1] = '\0';
+    e.rssi = rssi;
+    e.snr = snr;
+    strncpy(e.type, type, sizeof(e.type) - 1);
+    e.type[sizeof(e.type) - 1] = '\0';
+    pkt_log_head = (pkt_log_head + 1) % MAX_PACKET_LOG;
+    if (pkt_log_count < MAX_PACKET_LOG) pkt_log_count++;
+}
+
 bool init(bool spiffs_ok)
 {
     fallback_clock.begin();
@@ -196,6 +215,7 @@ bool init(bool spiffs_ok)
         return false;
     }
     g_mesh->setMessageCallback(onMeshMessage);
+    g_mesh->setPacketCallback(logPacket);
     g_mesh->setOwnName(own_name);
 
     // Generate or load identity
@@ -487,6 +507,15 @@ void loadChannels() {
 
 void saveState() {
     if (g_mesh) saveIdentity(g_mesh->self_id);
+}
+
+int getPacketLogCount() { return pkt_log_count; }
+
+bool getPacketLogEntry(int index, PacketLogEntry* out) {
+    if (index < 0 || index >= pkt_log_count || !out) return false;
+    int idx = (pkt_log_head - pkt_log_count + index + MAX_PACKET_LOG) % MAX_PACKET_LOG;
+    *out = pkt_log[idx];
+    return true;
 }
 
 } // namespace mesh

@@ -277,65 +277,36 @@ static void show_screen(lv_obj_t* scr)
 }
 
 // ════════════════════════════════════════════════════════
-// Heard — tabular node list with search bar
+// Packets — raw packet log (last N transmissions)
 // ════════════════════════════════════════════════════════
 void heard_screen_show()
 {
-    lv_obj_t* scr = make_screen_full("Heard");
+    lv_obj_t* scr = make_screen_full("Packets");
 
-    static constexpr int SEARCH_H  = 22;
     static constexpr int HEADER_H  = 16;
-    static constexpr int ROW_H     = 26;
-    int list_y = CONTENT_Y + SEARCH_H + DIVIDER_H + HEADER_H;
+    static constexpr int ROW_H     = 22;
+    int list_y = CONTENT_Y + HEADER_H + DIVIDER_H;
     int list_h = DISPLAY_H - list_y - DIVIDER_H - BOT_BAR_H;
 
-    // Search bar
-    lv_obj_t* search = lv_textarea_create(scr);
-    lv_obj_set_size(search, LV_PCT(100), SEARCH_H);
-    lv_obj_align(search, LV_ALIGN_TOP_MID, 0, CONTENT_Y);
-    lv_obj_set_style_bg_color(search, lv_color_hex(BG_INPUT), 0);
-    lv_obj_set_style_bg_opa(search, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(search, lv_color_hex(TEXT_PRIMARY), 0);
-    lv_obj_set_style_text_font(search, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_border_width(search, 0, 0);
-    lv_obj_set_style_pad_all(search, 4, 0);
-    lv_textarea_set_one_line(search, true);
-    lv_textarea_set_placeholder_text(search, LV_SYMBOL_EYE_OPEN "  Search nodes...");
-
-    lv_group_t* g = lv_group_get_default();
-    if (g) {
-        lv_group_add_obj(g, search);
-        lv_group_focus_obj(search);
-    }
-
-    // Search divider
-    lv_obj_t* sdiv = lv_obj_create(scr);
-    lv_obj_set_size(sdiv, LV_PCT(100), DIVIDER_H);
-    lv_obj_align(sdiv, LV_ALIGN_TOP_MID, 0, CONTENT_Y + SEARCH_H);
-    lv_obj_set_style_bg_color(sdiv, lv_color_hex(DIVIDER), 0);
-    lv_obj_set_style_bg_opa(sdiv, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(sdiv, 0, 0);
+    // Column offsets
+    static constexpr int COL_MARGIN = 6;
+    int col_time   = COL_MARGIN;                                          // 48px
+    int col_source = col_time + 52;                                       // ~106px
+    int col_rssi   = col_source + 106;                                     // ~44px
+    int col_snr    = col_rssi + 48;                                        // ~44px
+    int col_type   = col_snr + 44;                                         // ~66px
 
     // Column headers
     lv_obj_t* hdr = lv_obj_create(scr);
     lv_obj_set_size(hdr, LV_PCT(100), HEADER_H);
-    lv_obj_align(hdr, LV_ALIGN_TOP_MID, 0, CONTENT_Y + SEARCH_H + DIVIDER_H);
+    lv_obj_align(hdr, LV_ALIGN_TOP_MID, 0, CONTENT_Y);
     lv_obj_set_style_bg_color(hdr, lv_color_hex(BG_SECONDARY), 0);
     lv_obj_set_style_bg_opa(hdr, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(hdr, 0, 0);
     lv_obj_set_style_border_width(hdr, 0, 0);
 
-    // Proportional column offsets: NAME=40%, SIG=15%, DIST=15%, AREA=15%, TIME=15%
-    constexpr int col_margin = 8;
-    constexpr int col_total  = DISPLAY_W - col_margin * 2;
-    int col_name = col_margin;
-    int col_sig  = col_name + (col_total * 40) / 100;
-    int col_dist = col_sig  + (col_total * 15) / 100;
-    int col_area = col_dist + (col_total * 15) / 100;
-    int col_time = col_area + (col_total * 15) / 100;
-
-    const char* col_labels[] = {"NAME", "SIG", "DIST", "AREA", "TIME"};
-    int         col_x[]      = {col_name, col_sig, col_dist, col_area, col_time};
+    const char* col_labels[] = {"TIME", "SOURCE", "RSSI", "SNR", "TYPE"};
+    int col_x[] = {col_time, col_source, col_rssi, col_snr, col_type};
     for (int i = 0; i < 5; i++) {
         lv_obj_t* cl = lv_label_create(hdr);
         lv_label_set_text(cl, col_labels[i]);
@@ -343,6 +314,14 @@ void heard_screen_show()
         lv_obj_set_style_text_font(cl, &lv_font_montserrat_10, 0);
         lv_obj_align(cl, LV_ALIGN_LEFT_MID, col_x[i], 0);
     }
+
+    // Divider below header
+    lv_obj_t* div = lv_obj_create(scr);
+    lv_obj_set_size(div, LV_PCT(100), DIVIDER_H);
+    lv_obj_align(div, LV_ALIGN_TOP_MID, 0, CONTENT_Y + HEADER_H);
+    lv_obj_set_style_bg_color(div, lv_color_hex(DIVIDER), 0);
+    lv_obj_set_style_bg_opa(div, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(div, 0, 0);
 
     // Scrollable list area
     lv_obj_t* list = lv_obj_create(scr);
@@ -355,26 +334,19 @@ void heard_screen_show()
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
 
-    slopos::mesh::ContactInfo contacts[32];
-    int n = slopos::mesh::exportContactsFull(contacts, 32);
-
-    // Sort by RSSI (strongest first)
-    for (int i = 0; i < n-1; i++)
-        for (int j = i+1; j < n; j++)
-            if (contacts[j].rssi > contacts[i].rssi) {
-                auto tmp = contacts[i]; contacts[i] = contacts[j]; contacts[j] = tmp;
-            }
+    int n = slopos::mesh::getPacketLogCount();
 
     if (n == 0) {
         lv_obj_t* empty = lv_label_create(list);
-        lv_label_set_text(empty, "No nodes heard yet.\nWaiting for mesh traffic...");
+        lv_label_set_text(empty, "No packets yet.\nWaiting for mesh traffic...");
         lv_obj_set_style_text_color(empty, lv_color_hex(TEXT_SECONDARY), 0);
         lv_obj_set_style_text_font(empty, &lv_font_montserrat_12, 0);
         lv_obj_align(empty, LV_ALIGN_TOP_LEFT, 8, 8);
     } else {
-        uint32_t now = slopos::mesh::getCurrentTime();
-        for (int i = 0; i < n; i++) {
-            auto& c = contacts[i];
+        // Display newest first (reverse order)
+        for (int i = n - 1; i >= 0; i--) {
+            slopos::mesh::PacketLogEntry e;
+            if (!slopos::mesh::getPacketLogEntry(i, &e)) continue;
 
             lv_obj_t* row = lv_obj_create(list);
             lv_obj_set_size(row, LV_PCT(100), ROW_H);
@@ -384,56 +356,65 @@ void heard_screen_show()
             lv_obj_set_style_border_width(row, 0, 0);
             lv_obj_set_style_pad_all(row, 0, 0);
 
-            // Name
-            lv_obj_t* name_l = lv_label_create(row);
-            lv_label_set_text(name_l, c.name);
-            lv_obj_set_style_text_color(name_l, lv_color_hex(TEXT_PRIMARY), 0);
-            lv_obj_set_style_text_font(name_l, &lv_font_montserrat_10, 0);
-            lv_obj_align(name_l, LV_ALIGN_LEFT_MID, col_name, 0);
-
-            // Signal bars
-            const char* bars;
-            if (c.rssi > -70)       bars = "▂▄▆█";
-            else if (c.rssi > -85)  bars = "▂▄▆ ";
-            else if (c.rssi > -100) bars = "▂▄  ";
-            else if (c.rssi > -115) bars = "▂   ";
-            else                    bars = "    ";
-            lv_obj_t* sig_l = lv_label_create(row);
-            lv_label_set_text(sig_l, bars);
-            lv_obj_set_style_text_color(sig_l, lv_color_hex(ACCENT), 0);
-            lv_obj_set_style_text_font(sig_l, &lv_font_montserrat_10, 0);
-            lv_obj_align(sig_l, LV_ALIGN_LEFT_MID, col_sig, 0);
-
-            // Distance (show "—" — GPS distance not implemented)
-            lv_obj_t* dist_l = lv_label_create(row);
-            lv_label_set_text(dist_l, "\xe2\x80\x94");  // em dash "—"
-            lv_obj_set_style_text_color(dist_l, lv_color_hex(TEXT_MUTED), 0);
-            lv_obj_set_style_text_font(dist_l, &lv_font_montserrat_10, 0);
-            lv_obj_align(dist_l, LV_ALIGN_LEFT_MID, col_dist, 0);
-
-            // Area (placeholder "—" — mesh area grouping not yet implemented)
-            lv_obj_t* area_l = lv_label_create(row);
-            lv_label_set_text(area_l, "\xe2\x80\x94");
-            lv_obj_set_style_text_color(area_l, lv_color_hex(TEXT_MUTED), 0);
-            lv_obj_set_style_text_font(area_l, &lv_font_montserrat_10, 0);
-            lv_obj_align(area_l, LV_ALIGN_LEFT_MID, col_area, 0);
-
-            // Time since last seen
-            char time_buf[16];
-            if (now > 0 && c.last_seen > 0) {
-                int32_t age = (int32_t)(now - c.last_seen);
-                if (age < 0) age = 0;
-                if (age < 60)          snprintf(time_buf, sizeof(time_buf), "%ds", age);
-                else if (age < 3600)   snprintf(time_buf, sizeof(time_buf), "%dm", age/60);
-                else                   snprintf(time_buf, sizeof(time_buf), "%dh", age/3600);
+            // Time
+            char tbuf[8];
+            if (e.timestamp > 0) {
+                uint32_t sec = e.timestamp % 86400;
+                snprintf(tbuf, sizeof(tbuf), "%02d:%02d", (sec/3600)%24, (sec/60)%60);
             } else {
-                snprintf(time_buf, sizeof(time_buf), "--");
+                snprintf(tbuf, sizeof(tbuf), "--:--");
             }
             lv_obj_t* time_l = lv_label_create(row);
-            lv_label_set_text(time_l, time_buf);
+            lv_label_set_text(time_l, tbuf);
             lv_obj_set_style_text_color(time_l, lv_color_hex(TEXT_SECONDARY), 0);
             lv_obj_set_style_text_font(time_l, &lv_font_montserrat_10, 0);
             lv_obj_align(time_l, LV_ALIGN_LEFT_MID, col_time, 0);
+
+            // Source (truncate if needed)
+            char src_buf[20];
+            strncpy(src_buf, e.source, sizeof(src_buf) - 1);
+            src_buf[sizeof(src_buf) - 1] = '\0';
+            lv_obj_t* src_l = lv_label_create(row);
+            lv_label_set_text(src_l, src_buf);
+            lv_obj_set_style_text_color(src_l, lv_color_hex(TEXT_PRIMARY), 0);
+            lv_obj_set_style_text_font(src_l, &lv_font_montserrat_10, 0);
+            lv_obj_set_width(src_l, 100);
+            lv_label_set_long_mode(src_l, LV_LABEL_LONG_DOT);
+            lv_obj_align(src_l, LV_ALIGN_LEFT_MID, col_source, 0);
+
+            // RSSI
+            char rssi_buf[10];
+            snprintf(rssi_buf, sizeof(rssi_buf), "%d", e.rssi);
+            lv_obj_t* rssi_l = lv_label_create(row);
+            lv_label_set_text(rssi_l, rssi_buf);
+            lv_obj_set_style_text_color(rssi_l,
+                e.rssi > -85 ? lv_color_hex(ACCENT_GREEN) :
+                e.rssi > -100 ? lv_color_hex(ACCENT_ORANGE) :
+                lv_color_hex(ACCENT_RED), 0);
+            lv_obj_set_style_text_font(rssi_l, &lv_font_montserrat_10, 0);
+            lv_obj_align(rssi_l, LV_ALIGN_LEFT_MID, col_rssi, 0);
+
+            // SNR
+            char snr_buf[10];
+            snprintf(snr_buf, sizeof(snr_buf), "%.1f", e.snr);
+            lv_obj_t* snr_l = lv_label_create(row);
+            lv_label_set_text(snr_l, snr_buf);
+            lv_obj_set_style_text_color(snr_l, lv_color_hex(TEXT_SECONDARY), 0);
+            lv_obj_set_style_text_font(snr_l, &lv_font_montserrat_10, 0);
+            lv_obj_align(snr_l, LV_ALIGN_LEFT_MID, col_snr, 0);
+
+            // Type
+            uint32_t type_color;
+            if (strcmp(e.type, "ADVERT") == 0)       type_color = ACCENT;
+            else if (strcmp(e.type, "DM") == 0)      type_color = ACCENT_GREEN;
+            else if (strcmp(e.type, "CHANNEL") == 0)  type_color = ACCENT_ORANGE;
+            else if (strcmp(e.type, "ANON") == 0)     type_color = TEXT_MUTED;
+            else                                      type_color = TEXT_SECONDARY;
+            lv_obj_t* type_l = lv_label_create(row);
+            lv_label_set_text(type_l, e.type);
+            lv_obj_set_style_text_color(type_l, lv_color_hex(type_color), 0);
+            lv_obj_set_style_text_font(type_l, &lv_font_montserrat_10, 0);
+            lv_obj_align(type_l, LV_ALIGN_LEFT_MID, col_type, 0);
         }
     }
 
